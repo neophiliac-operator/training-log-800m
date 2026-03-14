@@ -1,0 +1,794 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Training Log — 800M → 1:54</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏃</text></svg>" />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #0a0a0a;
+      color: #e5e5e5;
+      font-family: 'IBM Plex Mono', 'JetBrains Mono', 'Courier New', monospace;
+      -webkit-font-smoothing: antialiased;
+    }
+    input, select, textarea {
+      font-family: 'IBM Plex Mono', monospace;
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      color: #e5e5e5;
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 13px;
+      width: 100%;
+      box-sizing: border-box;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    input:focus, select:focus, textarea:focus { border-color: #dc2626; }
+    select { cursor: pointer; }
+    textarea { resize: vertical; min-height: 60px; }
+    input[type="checkbox"] { width: auto; cursor: pointer; accent-color: #dc2626; }
+    ::placeholder { color: #404040; }
+    input[type="range"] { padding: 0; border: none; background: transparent; }
+    input[type="range"]::-webkit-slider-track { background: #2a2a2a; height: 4px; border-radius: 2px; }
+    input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%; background: #dc2626; cursor: pointer; margin-top: -7px; }
+    input[type="range"]::-moz-range-track { background: #2a2a2a; height: 4px; border-radius: 2px; border: none; }
+    input[type="range"]::-moz-range-thumb { width: 18px; height: 18px; border-radius: 50%; background: #dc2626; cursor: pointer; border: none; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+    .fade-in { animation: fadeIn 0.25s ease-out; }
+    .day-btn { transition: all 0.15s ease; }
+    .day-btn:hover { transform: translateY(-2px); }
+    .btn-hover:hover { opacity: 0.85; }
+    .nav-btn { background: none; border: 1px solid #262626; color: #737373; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 14px; }
+    .nav-btn:hover { border-color: #404040; color: #a3a3a3; }
+    .week-row { cursor: pointer; transition: opacity 0.15s; }
+    .week-row:hover { opacity: 1 !important; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+    .syncing { animation: pulse 1s ease-in-out infinite; }
+    @media (max-width: 480px) {
+      .stat-grid-4 { grid-template-columns: 1fr 1fr !important; }
+      .race-detail-grid { grid-template-columns: 1fr !important; }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useEffect, useCallback, useRef } = React;
+
+    const STORAGE_KEY = "training-log-800m-1-54";
+    const SHEET_ID = "1biysog1UEMP9TCvUiTFzY-GCS4GwnHnsk7YLVOFmZoY";
+    const GVIZ_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json`;
+    
+    // Apps Script Web App URL — set after deployment
+    const API_URL_KEY = "training-log-api-url";
+
+    const PHASES = [
+      { name: "Phase 1: Base + Speed Reserve", color: "#2563eb", dates: "Mar 15 – Apr 5" },
+      { name: "Phase 2: Race-Specific Sharpening", color: "#d97706", dates: "Apr 6 – Apr 26" },
+      { name: "Phase 3: Peak & Taper", color: "#dc2626", dates: "Apr 27 – May 17" },
+      { name: "Race Season", color: "#10b981", dates: "May 18+" },
+    ];
+
+    const WORKOUT_TYPES = [
+      "Easy Run", "Tempo/Threshold", "Speed Endurance", "Race-Pace Intervals",
+      "Speed", "Race Simulation", "Long Run", "Strides Only", "Pre-Race Shakeout",
+      "Race", "Cross Training", "Rest Day", "Other"
+    ];
+
+    const EFFORT_LEVELS = ["Recovery", "Easy", "Moderate", "Hard", "Max Effort", "Race"];
+    const RACE_EVENTS = ["400m", "800m", "1000m", "1500m", "1600m", "Mile", "3200m"];
+
+    const formatDate = (d) => {
+      const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+      const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      return `${days[d.getDay()]}, ${months[d.getMonth()]} ${d.getDate()}`;
+    };
+
+    const formatDateKey = (d) =>
+      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+    const parseTimeToSeconds = (t) => {
+      if (!t) return null;
+      const parts = t.split(":").map(Number);
+      if (parts.length === 2) return parts[0] * 60 + parts[1];
+      if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+      return null;
+    };
+
+    const defaultEntry = () => ({
+      type: "", description: "", distance: "", distanceUnit: "miles",
+      duration: "", splits: "", effort: "", raceEvent: "", raceTime: "",
+      raceSplits: "", racePlace: "", meetName: "", weight: "",
+      sleepHours: "", ironSupplement: false, notes: "", feeling: 3,
+    });
+
+    const feelingEmojis = ["", "😫", "😕", "😐", "😊", "🔥"];
+    const feelingLabels = ["", "Terrible", "Off", "Okay", "Good", "Great"];
+
+    // ── Storage: localStorage (fast cache) + Google Sheets (persistent) ──
+    const loadLocal = () => {
+      try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}"); }
+      catch { return {}; }
+    };
+
+    const saveLocal = (data) => {
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch {}
+    };
+
+    const getApiUrl = () => localStorage.getItem(API_URL_KEY) || "";
+    const setApiUrl = (url) => localStorage.setItem(API_URL_KEY, url);
+
+    // Load from Google Sheets (public gviz endpoint)
+    const loadFromSheet = async () => {
+      try {
+        const res = await fetch(GVIZ_URL);
+        const text = await res.text();
+        const json = JSON.parse(text.substring(47).slice(0, -2));
+        const rows = json.table.rows;
+        const entries = {};
+        for (const row of rows) {
+          const c = row.c;
+          const date = c[0]?.v;
+          if (!date) continue;
+          entries[date] = {
+            type: c[1]?.v || "", description: c[2]?.v || "", distance: c[3]?.v || "",
+            distanceUnit: c[4]?.v || "miles", duration: c[5]?.v || "", splits: c[6]?.v || "",
+            effort: c[7]?.v || "", raceEvent: c[8]?.v || "", raceTime: c[9]?.v || "",
+            raceSplits: c[10]?.v || "", racePlace: c[11]?.v || "", meetName: c[12]?.v || "",
+            weight: c[13]?.v || "", sleepHours: c[14]?.v || "",
+            ironSupplement: c[15]?.v === true || c[15]?.v === "true" || c[15]?.v === "TRUE",
+            feeling: Number(c[16]?.v) || 3, notes: c[17]?.v || "",
+          };
+        }
+        return entries;
+      } catch (err) {
+        console.warn("Sheet load failed:", err);
+        return null;
+      }
+    };
+
+    // Write to Google Sheets via Apps Script
+    const saveToSheet = async (action, payload) => {
+      const url = getApiUrl();
+      if (!url) return { status: "no-api" };
+      try {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "text/plain" },
+          body: JSON.stringify({ action, ...payload }),
+        });
+        return await res.json();
+      } catch (err) {
+        console.warn("Sheet save failed:", err);
+        return { status: "error", message: err.toString() };
+      }
+    };
+
+    const exportData = (entries) => {
+      const blob = new Blob([JSON.stringify(entries, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a"); a.href = url;
+      a.download = `training-log-export-${formatDateKey(new Date())}.json`;
+      a.click(); URL.revokeObjectURL(url);
+    };
+
+    const importData = (file, callback) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try { callback(JSON.parse(e.target.result)); }
+        catch { alert("Invalid file format."); }
+      };
+      reader.readAsText(file);
+    };
+
+    // ── Helpers ──
+    const isToday = (d) => {
+      const t = new Date();
+      return d.getDate() === t.getDate() && d.getMonth() === t.getMonth() && d.getFullYear() === t.getFullYear();
+    };
+
+    const getEntryColor = (e) => {
+      if (!e || !e.type) return "transparent";
+      if (e.type === "Race") return "#dc2626";
+      if (e.type === "Rest Day") return "#374151";
+      if (e.type === "Easy Run" || e.type === "Strides Only") return "#1d4ed8";
+      if (e.type === "Speed" || e.type === "Speed Endurance") return "#d97706";
+      if (e.type === "Tempo/Threshold" || e.type === "Race-Pace Intervals" || e.type === "Race Simulation") return "#7c3aed";
+      if (e.type === "Long Run") return "#059669";
+      if (e.type === "Pre-Race Shakeout") return "#0ea5e9";
+      if (e.type === "Cross Training") return "#8b5cf6";
+      return "#6b7280";
+    };
+
+    const getCurrentPhase = (date) => {
+      const y = date.getFullYear();
+      const checks = [new Date(y,2,15), new Date(y,3,6), new Date(y,3,27), new Date(y,4,18)];
+      if (date < checks[0]) return null;
+      if (date < checks[1]) return 0;
+      if (date < checks[2]) return 1;
+      if (date < checks[3]) return 2;
+      return 3;
+    };
+
+    // ── Main App ──
+    function App() {
+      const [entries, setEntries] = useState(loadLocal);
+      const [selectedDate, setSelectedDate] = useState(new Date());
+      const [weekOffset, setWeekOffset] = useState(0);
+      const [editingEntry, setEditingEntry] = useState(null);
+      const [showStats, setShowStats] = useState(false);
+      const [showSettings, setShowSettings] = useState(false);
+      const [saveIndicator, setSaveIndicator] = useState(false);
+      const [syncStatus, setSyncStatus] = useState("idle"); // idle, syncing, synced, error, no-api
+      const [apiUrl, setApiUrlState] = useState(getApiUrl());
+
+      // Load from Google Sheets on mount
+      useEffect(() => {
+        setSyncStatus("syncing");
+        loadFromSheet().then(sheetData => {
+          if (sheetData && Object.keys(sheetData).length > 0) {
+            // Merge: sheet data is truth, but keep local entries not in sheet
+            const merged = { ...sheetData };
+            setEntries(merged);
+            saveLocal(merged);
+            setSyncStatus("synced");
+          } else {
+            setSyncStatus(Object.keys(loadLocal()).length > 0 ? "local-only" : "idle");
+          }
+        }).catch(() => setSyncStatus("error"));
+      }, []);
+
+      const getWeekDates = (offset) => {
+        const today = new Date();
+        const start = new Date(today);
+        start.setDate(today.getDate() - today.getDay() + 1 + offset * 7);
+        return Array.from({ length: 7 }, (_, i) => {
+          const d = new Date(start);
+          d.setDate(start.getDate() + i);
+          return d;
+        });
+      };
+
+      const weekDates = getWeekDates(weekOffset);
+      const dateKey = formatDateKey(selectedDate);
+      const currentEntry = entries[dateKey] || defaultEntry();
+      const phase = getCurrentPhase(selectedDate);
+
+      const updateEntry = (field, value) => {
+        const updated = { ...entries, [dateKey]: { ...currentEntry, [field]: value } };
+        setEntries(updated);
+        setEditingEntry(dateKey);
+      };
+
+      const saveCurrentEntry = async () => {
+        saveLocal(entries);
+        setEditingEntry(null);
+        setSaveIndicator(true);
+        
+        // Save to Google Sheets
+        const entry = entries[dateKey];
+        if (entry && entry.type) {
+          setSyncStatus("syncing");
+          const result = await saveToSheet("save", { date: dateKey, entry });
+          setSyncStatus(result.status === "ok" ? "synced" : result.status === "no-api" ? "no-api" : "error");
+        }
+        
+        setTimeout(() => setSaveIndicator(false), 1500);
+      };
+
+      const deleteEntry = async () => {
+        if (!confirm("Delete this entry?")) return;
+        const updated = { ...entries };
+        delete updated[dateKey];
+        setEntries(updated);
+        saveLocal(updated);
+        setEditingEntry(null);
+        
+        setSyncStatus("syncing");
+        const result = await saveToSheet("delete", { date: dateKey });
+        setSyncStatus(result.status === "ok" ? "synced" : result.status === "no-api" ? "no-api" : "error");
+      };
+
+      const syncAllToSheet = async () => {
+        setSyncStatus("syncing");
+        const result = await saveToSheet("sync", { entries });
+        setSyncStatus(result.status === "ok" ? "synced" : result.status === "no-api" ? "no-api" : "error");
+        if (result.status === "ok") {
+          alert(`Synced ${result.count} entries to Google Sheets!`);
+        } else if (result.status === "no-api") {
+          alert("Set the Apps Script URL in Settings first.");
+        } else {
+          alert("Sync failed: " + (result.message || "unknown error"));
+        }
+      };
+
+      const pullFromSheet = async () => {
+        setSyncStatus("syncing");
+        const data = await loadFromSheet();
+        if (data && Object.keys(data).length > 0) {
+          setEntries(data);
+          saveLocal(data);
+          setSyncStatus("synced");
+          alert(`Pulled ${Object.keys(data).length} entries from Google Sheets!`);
+        } else {
+          setSyncStatus("error");
+          alert("No data found in sheet or load failed.");
+        }
+      };
+
+      const clearAllData = () => {
+        if (!confirm("Delete ALL local training data? This cannot be undone.")) return;
+        if (!confirm("Are you absolutely sure?")) return;
+        setEntries({});
+        localStorage.removeItem(STORAGE_KEY);
+      };
+
+      const handleApiUrlChange = (url) => {
+        setApiUrlState(url);
+        setApiUrl(url);
+      };
+
+      // Week stats
+      const getWeeklyStats = () => {
+        const keys = weekDates.map(formatDateKey);
+        const we = keys.map(k => entries[k]).filter(Boolean);
+        let totalMiles = 0, raceCount = 0, restDays = 0, feelings = [];
+        we.forEach(e => {
+          if (e.distance) {
+            let d = parseFloat(e.distance) || 0;
+            if (e.distanceUnit === "km") d *= 0.621371;
+            if (e.distanceUnit === "meters") d *= 0.000621371;
+            totalMiles += d;
+          }
+          if (e.type === "Race") raceCount++;
+          if (e.type === "Rest Day") restDays++;
+          if (e.feeling) feelings.push(e.feeling);
+        });
+        const avgFeeling = feelings.length ? (feelings.reduce((a,b)=>a+b,0)/feelings.length).toFixed(1) : "--";
+        return { totalMiles: totalMiles.toFixed(1), raceCount, restDays, avgFeeling, logged: we.length };
+      };
+
+      const getAllTimeStats = () => {
+        const all = Object.entries(entries);
+        let totalMiles = 0, races = [], pbs = {};
+        let sleepData = [], totalWorkouts = 0;
+        all.forEach(([key, e]) => {
+          if (e.distance) {
+            let d = parseFloat(e.distance) || 0;
+            if (e.distanceUnit === "km") d *= 0.621371;
+            if (e.distanceUnit === "meters") d *= 0.000621371;
+            totalMiles += d;
+          }
+          if (e.type && e.type !== "Rest Day") totalWorkouts++;
+          if (e.sleepHours) sleepData.push(parseFloat(e.sleepHours));
+          if (e.type === "Race" && e.raceTime && e.raceEvent) {
+            const secs = parseTimeToSeconds(e.raceTime);
+            races.push({ event: e.raceEvent, time: e.raceTime, seconds: secs, meet: e.meetName, date: key });
+            if (!pbs[e.raceEvent] || secs < pbs[e.raceEvent].seconds) {
+              pbs[e.raceEvent] = { time: e.raceTime, seconds: secs, meet: e.meetName, date: key };
+            }
+          }
+        });
+        const avgSleep = sleepData.length ? (sleepData.reduce((a,b)=>a+b,0)/sleepData.length).toFixed(1) : "--";
+        races.sort((a,b) => b.date.localeCompare(a.date));
+        return { totalMiles: totalMiles.toFixed(1), raceCount: races.length, pbs, totalWorkouts, avgSleep, races, totalDays: all.length };
+      };
+
+      const weekStats = getWeeklyStats();
+
+      const syncStatusDisplay = {
+        "idle": { text: "", color: "#525252" },
+        "syncing": { text: "⟳ syncing", color: "#d97706" },
+        "synced": { text: "☁ synced", color: "#10b981" },
+        "error": { text: "⚠ offline", color: "#dc2626" },
+        "no-api": { text: "⚙ setup needed", color: "#525252" },
+        "local-only": { text: "💾 local", color: "#525252" },
+      };
+      const syncInfo = syncStatusDisplay[syncStatus] || syncStatusDisplay.idle;
+
+      return (
+        <div style={{ minHeight: "100vh", padding: "24px 16px", maxWidth: 800, margin: "0 auto" }}>
+
+          {/* Header */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", borderBottom: "2px solid #dc2626", paddingBottom: 16, marginBottom: 20 }}>
+            <div>
+              <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0, color: "#fff", letterSpacing: "-0.5px" }}>
+                TRAINING LOG
+              </h1>
+              <div style={{ fontSize: 11, color: "#525252", marginTop: 4 }}>
+                800M → 1:54 · 2026 OUTDOOR
+                {saveIndicator && <span style={{ color: "#10b981", marginLeft: 12 }}>✓ saved</span>}
+                <span className={syncStatus === "syncing" ? "syncing" : ""} style={{ marginLeft: 12, color: syncInfo.color, fontSize: 10 }}>
+                  {syncInfo.text}
+                </span>
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button onClick={() => { setShowStats(false); setShowSettings(!showSettings); }}
+                style={{
+                  background: showSettings ? "#17171780" : "#171717",
+                  border: `1px solid ${showSettings ? "#404040" : "#262626"}`,
+                  color: showSettings ? "#a3a3a3" : "#525252",
+                  padding: "8px 10px", borderRadius: 6, cursor: "pointer", fontSize: 13, fontFamily: "inherit",
+                }}>⚙</button>
+              <button onClick={() => { setShowSettings(false); setShowStats(!showStats); }}
+                style={{
+                  background: showStats ? "#dc262620" : "#171717",
+                  border: `1px solid ${showStats ? "#dc2626" : "#262626"}`,
+                  color: showStats ? "#dc2626" : "#737373",
+                  padding: "8px 14px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: "inherit", letterSpacing: 0.5,
+                }}>
+                {showStats ? "← LOG" : "STATS"}
+              </button>
+            </div>
+          </div>
+
+          {/* Phase indicator */}
+          {phase !== null && !showStats && !showSettings && (
+            <div style={{
+              background: `${PHASES[phase].color}10`, border: `1px solid ${PHASES[phase].color}30`,
+              borderRadius: 6, padding: "8px 14px", marginBottom: 16,
+              display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11,
+            }}>
+              <span style={{ color: PHASES[phase].color, fontWeight: 600 }}>{PHASES[phase].name}</span>
+              <span style={{ color: "#525252" }}>{PHASES[phase].dates}</span>
+            </div>
+          )}
+
+          {/* ── Settings View ── */}
+          {showSettings && (
+            <div className="fade-in" style={{ display: "grid", gap: 12 }}>
+              {/* Google Sheets Sync */}
+              <h3 style={{ fontSize: 12, color: "#dc2626", letterSpacing: 1, fontWeight: 600 }}>☁ GOOGLE SHEETS SYNC</h3>
+              <div style={{ background: "#171717", border: "1px solid #262626", borderRadius: 8, padding: 14, display: "grid", gap: 10 }}>
+                <div>
+                  <label style={{ fontSize: 9, color: "#525252", letterSpacing: 1, display: "block", marginBottom: 4 }}>APPS SCRIPT WEB APP URL</label>
+                  <input
+                    placeholder="https://script.google.com/macros/s/.../exec"
+                    value={apiUrl}
+                    onChange={e => handleApiUrlChange(e.target.value)}
+                    style={{ fontSize: 11 }}
+                  />
+                  <div style={{ fontSize: 9, color: "#333", marginTop: 4 }}>
+                    Paste the URL after deploying the Apps Script. Without this, saves are local-only.
+                  </div>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                  <button onClick={syncAllToSheet} style={{
+                    background: "#171717", border: "1px solid #262626", color: "#a3a3a3",
+                    padding: "10px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontFamily: "inherit",
+                  }}>⬆ Push All to Sheet</button>
+                  <button onClick={pullFromSheet} style={{
+                    background: "#171717", border: "1px solid #262626", color: "#a3a3a3",
+                    padding: "10px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontFamily: "inherit",
+                  }}>⬇ Pull from Sheet</button>
+                </div>
+              </div>
+
+              <h3 style={{ fontSize: 12, color: "#737373", letterSpacing: 1, fontWeight: 600, marginTop: 8 }}>DATA MANAGEMENT</h3>
+              <button onClick={() => exportData(entries)} style={{
+                background: "#171717", border: "1px solid #262626", color: "#a3a3a3",
+                padding: "12px", borderRadius: 6, cursor: "pointer", fontSize: 12, fontFamily: "inherit", textAlign: "left",
+              }}>📥 Export Training Data (JSON)</button>
+              <label style={{
+                background: "#171717", border: "1px solid #262626", color: "#a3a3a3",
+                padding: "12px", borderRadius: 6, cursor: "pointer", fontSize: 12, display: "block",
+              }}>
+                📤 Import Training Data (JSON)
+                <input type="file" accept=".json" style={{ display: "none" }}
+                  onChange={(e) => { if (e.target.files[0]) importData(e.target.files[0], (data) => {
+                    setEntries(data); saveLocal(data); alert("Imported! Push to Sheet to sync.");
+                  }); }} />
+              </label>
+              <button onClick={clearAllData} style={{
+                background: "#171717", border: "1px solid #401010", color: "#7f1d1d",
+                padding: "12px", borderRadius: 6, cursor: "pointer", fontSize: 12, fontFamily: "inherit", textAlign: "left",
+              }}>🗑️ Delete All Local Data</button>
+              <div style={{ fontSize: 10, color: "#333", marginTop: 8, lineHeight: 1.6 }}>
+                Data syncs to Google Sheets when connected. Local storage is used as a fast cache. Pull/Push buttons let you manually sync.
+              </div>
+            </div>
+          )}
+
+          {/* ── Stats View ── */}
+          {showStats && !showSettings && (
+            <div className="fade-in">
+              {(() => {
+                const s = getAllTimeStats();
+                return (
+                  <>
+                    <div className="stat-grid-4" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 10, marginBottom: 24 }}>
+                      {[
+                        { label: "Total Miles", value: s.totalMiles },
+                        { label: "Workouts", value: s.totalWorkouts },
+                        { label: "Races", value: s.raceCount },
+                        { label: "Avg Sleep", value: s.avgSleep !== "--" ? `${s.avgSleep}h` : "--" },
+                      ].map((item, i) => (
+                        <div key={i} style={{ background: "#171717", border: "1px solid #262626", borderRadius: 6, padding: "14px 12px" }}>
+                          <div style={{ fontSize: 9, color: "#525252", textTransform: "uppercase", letterSpacing: 1 }}>{item.label}</div>
+                          <div style={{ fontSize: 20, fontWeight: 700, color: "#fff", marginTop: 4 }}>{item.value}</div>
+                        </div>
+                      ))}
+                    </div>
+                    <h3 style={{ fontSize: 12, color: "#737373", letterSpacing: 1, marginBottom: 12, fontWeight: 600 }}>PERSONAL BESTS</h3>
+                    {Object.keys(s.pbs).length === 0 ? (
+                      <div style={{ color: "#404040", fontSize: 12, padding: 20, textAlign: "center", background: "#171717", borderRadius: 6 }}>
+                        No races logged yet — log your first race to track PBs
+                      </div>
+                    ) : (
+                      Object.entries(s.pbs).map(([event, data], i) => (
+                        <div key={i} style={{
+                          background: "#171717", border: "1px solid #262626", borderRadius: 6, padding: "12px 16px", marginBottom: 8,
+                          display: "flex", justifyContent: "space-between", alignItems: "center",
+                        }}>
+                          <div>
+                            <div style={{ fontSize: 13, color: "#e5e5e5", fontWeight: 600 }}>{event}</div>
+                            <div style={{ fontSize: 10, color: "#525252", marginTop: 2 }}>{data.meet && `${data.meet} · `}{data.date}</div>
+                          </div>
+                          <div style={{ fontSize: 18, fontWeight: 700, color: "#dc2626" }}>{data.time}</div>
+                        </div>
+                      ))
+                    )}
+                    {s.races.length > 0 && (
+                      <>
+                        <h3 style={{ fontSize: 12, color: "#737373", letterSpacing: 1, marginTop: 24, marginBottom: 12, fontWeight: 600 }}>RACE HISTORY</h3>
+                        {s.races.map((r, i) => (
+                          <div key={i} style={{
+                            display: "grid", gridTemplateColumns: "70px 1fr auto", gap: 10, alignItems: "center",
+                            padding: "8px 0", borderBottom: "1px solid #151515", fontSize: 12,
+                          }}>
+                            <div style={{ color: "#404040" }}>{r.date.slice(5)}</div>
+                            <div style={{ color: "#a3a3a3" }}>{r.event}{r.meet ? ` · ${r.meet}` : ""}</div>
+                            <div style={{ color: "#fff", fontWeight: 600 }}>{r.time}</div>
+                          </div>
+                        ))}
+                      </>
+                    )}
+                    <h3 style={{ fontSize: 12, color: "#737373", letterSpacing: 1, marginTop: 24, marginBottom: 12, fontWeight: 600 }}>THIS WEEK</h3>
+                    <div style={{ background: "#171717", border: "1px solid #262626", borderRadius: 8, padding: 16 }}>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, fontSize: 12 }}>
+                        <div><span style={{ color: "#525252" }}>Miles:</span> <span style={{ color: "#fff", fontWeight: 600 }}>{weekStats.totalMiles}</span></div>
+                        <div><span style={{ color: "#525252" }}>Logged:</span> <span style={{ color: "#fff", fontWeight: 600 }}>{weekStats.logged}/7</span></div>
+                        <div><span style={{ color: "#525252" }}>Feel:</span> <span>{weekStats.avgFeeling !== "--" ? feelingEmojis[Math.round(weekStats.avgFeeling)] : "--"}</span></div>
+                        <div><span style={{ color: "#525252" }}>Rest:</span> <span style={{ color: "#fff", fontWeight: 600 }}>{weekStats.restDays}</span></div>
+                        <div><span style={{ color: "#525252" }}>Races:</span> <span style={{ color: "#dc2626", fontWeight: 600 }}>{weekStats.raceCount}</span></div>
+                      </div>
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+          )}
+
+          {/* ── Log View ── */}
+          {!showStats && !showSettings && (
+            <>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+                <button className="nav-btn" onClick={() => setWeekOffset(w => w - 1)}>◀</button>
+                <button onClick={() => setWeekOffset(0)} style={{
+                  background: "none", border: "none", color: "#525252", cursor: "pointer",
+                  fontFamily: "inherit", fontSize: 11, letterSpacing: 0.5
+                }}>{weekOffset === 0 ? "THIS WEEK" : "GO TO TODAY"}</button>
+                <button className="nav-btn" onClick={() => setWeekOffset(w => w + 1)}>▶</button>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 6, marginBottom: 20 }}>
+                {weekDates.map((d, i) => {
+                  const key = formatDateKey(d);
+                  const selected = key === dateKey;
+                  const today = isToday(d);
+                  const e = entries[key];
+                  const has = e && e.type;
+                  const color = getEntryColor(e);
+                  return (
+                    <button key={i} className="day-btn" onClick={() => setSelectedDate(new Date(d))}
+                      style={{
+                        background: selected ? "#1a1a1a" : "transparent",
+                        border: selected ? "1px solid #dc2626" : today ? "1px solid #333" : "1px solid transparent",
+                        borderRadius: 8, padding: "10px 4px", cursor: "pointer",
+                        display: "flex", flexDirection: "column", alignItems: "center", gap: 4, fontFamily: "inherit",
+                      }}>
+                      <div style={{ fontSize: 9, color: "#525252", letterSpacing: 1 }}>{["MON","TUE","WED","THU","FRI","SAT","SUN"][i]}</div>
+                      <div style={{ fontSize: 16, fontWeight: selected ? 700 : 400, color: selected ? "#fff" : today ? "#e5e5e5" : "#737373" }}>{d.getDate()}</div>
+                      <div style={{ width: 6, height: 6, borderRadius: "50%", background: has ? color : "transparent" }} />
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                <div style={{ fontSize: 15, fontWeight: 600, color: "#fff" }}>{formatDate(selectedDate)}</div>
+                {currentEntry.type && (
+                  <button onClick={deleteEntry} style={{
+                    background: "none", border: "1px solid #401010", color: "#7f1d1d",
+                    padding: "4px 10px", borderRadius: 4, cursor: "pointer", fontFamily: "inherit", fontSize: 10,
+                  }}>DELETE</button>
+                )}
+              </div>
+
+              <div className="fade-in" style={{ display: "grid", gap: 12 }}>
+                <div>
+                  <label style={{ fontSize: 10, color: "#525252", letterSpacing: 1, display: "block", marginBottom: 4 }}>WORKOUT TYPE</label>
+                  <select value={currentEntry.type} onChange={e => updateEntry("type", e.target.value)}>
+                    <option value="">Select workout type...</option>
+                    {WORKOUT_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+
+                {currentEntry.type === "Race" && (
+                  <div className="fade-in" style={{ background: "#dc262608", border: "1px solid #dc262625", borderRadius: 8, padding: 14, display: "grid", gap: 10 }}>
+                    <div style={{ fontSize: 10, color: "#dc2626", fontWeight: 600, letterSpacing: 1 }}>RACE DETAILS</div>
+                    <div className="race-detail-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                      <div>
+                        <label style={{ fontSize: 9, color: "#525252", letterSpacing: 1, display: "block", marginBottom: 3 }}>EVENT</label>
+                        <select value={currentEntry.raceEvent} onChange={e => updateEntry("raceEvent", e.target.value)}>
+                          <option value="">Select...</option>
+                          {RACE_EVENTS.map(ev => <option key={ev} value={ev}>{ev}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label style={{ fontSize: 9, color: "#525252", letterSpacing: 1, display: "block", marginBottom: 3 }}>TIME</label>
+                        <input placeholder="1:54.00" value={currentEntry.raceTime} onChange={e => updateEntry("raceTime", e.target.value)} />
+                      </div>
+                    </div>
+                    <div className="race-detail-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                      <div>
+                        <label style={{ fontSize: 9, color: "#525252", letterSpacing: 1, display: "block", marginBottom: 3 }}>MEET NAME</label>
+                        <input placeholder="GHSA State" value={currentEntry.meetName} onChange={e => updateEntry("meetName", e.target.value)} />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: 9, color: "#525252", letterSpacing: 1, display: "block", marginBottom: 3 }}>PLACE</label>
+                        <input placeholder="1st" value={currentEntry.racePlace} onChange={e => updateEntry("racePlace", e.target.value)} />
+                      </div>
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 9, color: "#525252", letterSpacing: 1, display: "block", marginBottom: 3 }}>SPLITS</label>
+                      <input placeholder="27.5 / 28.5 / 29.0 / 29.0" value={currentEntry.raceSplits} onChange={e => updateEntry("raceSplits", e.target.value)} />
+                    </div>
+                  </div>
+                )}
+
+                {currentEntry.type && currentEntry.type !== "Rest Day" && (
+                  <div className="fade-in">
+                    <label style={{ fontSize: 10, color: "#525252", letterSpacing: 1, display: "block", marginBottom: 4 }}>WORKOUT DETAILS</label>
+                    <textarea placeholder="e.g., 5×600m @ 1:25-1:27, 90s jog recovery" value={currentEntry.description} onChange={e => updateEntry("description", e.target.value)} />
+                  </div>
+                )}
+
+                {currentEntry.type && currentEntry.type !== "Rest Day" && (
+                  <div className="fade-in" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                    <div>
+                      <label style={{ fontSize: 10, color: "#525252", letterSpacing: 1, display: "block", marginBottom: 4 }}>DISTANCE</label>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <input placeholder="6.0" value={currentEntry.distance} onChange={e => updateEntry("distance", e.target.value)} style={{ flex: 1 }} />
+                        <select value={currentEntry.distanceUnit} onChange={e => updateEntry("distanceUnit", e.target.value)} style={{ width: 60, flex: "none" }}>
+                          <option value="miles">mi</option>
+                          <option value="km">km</option>
+                          <option value="meters">m</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 10, color: "#525252", letterSpacing: 1, display: "block", marginBottom: 4 }}>DURATION</label>
+                      <input placeholder="45:00" value={currentEntry.duration} onChange={e => updateEntry("duration", e.target.value)} />
+                    </div>
+                  </div>
+                )}
+
+                {currentEntry.type && currentEntry.type !== "Rest Day" && currentEntry.type !== "Race" && (
+                  <div className="fade-in" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                    <div>
+                      <label style={{ fontSize: 10, color: "#525252", letterSpacing: 1, display: "block", marginBottom: 4 }}>EFFORT</label>
+                      <select value={currentEntry.effort} onChange={e => updateEntry("effort", e.target.value)}>
+                        <option value="">Select...</option>
+                        {EFFORT_LEVELS.map(e => <option key={e} value={e}>{e}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 10, color: "#525252", letterSpacing: 1, display: "block", marginBottom: 4 }}>INTERVAL SPLITS</label>
+                      <input placeholder="1:26, 1:25, 1:27..." value={currentEntry.splits} onChange={e => updateEntry("splits", e.target.value)} />
+                    </div>
+                  </div>
+                )}
+
+                {currentEntry.type && (
+                  <div className="fade-in">
+                    <label style={{ fontSize: 10, color: "#525252", letterSpacing: 1, display: "block", marginBottom: 8 }}>
+                      HOW DID IT FEEL? <span style={{ color: "#fff", marginLeft: 8 }}>{feelingEmojis[currentEntry.feeling]} {feelingLabels[currentEntry.feeling]}</span>
+                    </label>
+                    <input type="range" min="1" max="5" value={currentEntry.feeling}
+                      onChange={e => updateEntry("feeling", parseInt(e.target.value))} style={{ width: "100%" }} />
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: "#404040", marginTop: 2 }}>
+                      <span>Terrible</span><span>Off</span><span>Okay</span><span>Good</span><span>Great</span>
+                    </div>
+                  </div>
+                )}
+
+                {currentEntry.type && (
+                  <div className="fade-in" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+                    <div>
+                      <label style={{ fontSize: 10, color: "#525252", letterSpacing: 1, display: "block", marginBottom: 4 }}>SLEEP (hrs)</label>
+                      <input type="number" step="0.5" placeholder="8.5" value={currentEntry.sleepHours} onChange={e => updateEntry("sleepHours", e.target.value)} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 10, color: "#525252", letterSpacing: 1, display: "block", marginBottom: 4 }}>WEIGHT (lbs)</label>
+                      <input type="number" placeholder="155" value={currentEntry.weight} onChange={e => updateEntry("weight", e.target.value)} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 10, color: "#525252", letterSpacing: 1, display: "block", marginBottom: 4 }}>IRON SUPP</label>
+                      <div onClick={() => updateEntry("ironSupplement", !currentEntry.ironSupplement)}
+                        style={{
+                          background: "#1a1a1a", border: `1px solid ${currentEntry.ironSupplement ? "#dc2626" : "#2a2a2a"}`,
+                          borderRadius: 6, padding: "8px 12px", display: "flex", alignItems: "center", gap: 8, cursor: "pointer",
+                        }}>
+                        <input type="checkbox" checked={currentEntry.ironSupplement} readOnly />
+                        <span style={{ fontSize: 12, color: currentEntry.ironSupplement ? "#dc2626" : "#525252" }}>
+                          {currentEntry.ironSupplement ? "Yes" : "No"}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {currentEntry.type && (
+                  <div className="fade-in">
+                    <label style={{ fontSize: 10, color: "#525252", letterSpacing: 1, display: "block", marginBottom: 4 }}>NOTES</label>
+                    <textarea placeholder="Legs felt heavy, weather hot, mental cue worked at 600m..." value={currentEntry.notes} onChange={e => updateEntry("notes", e.target.value)} />
+                  </div>
+                )}
+
+                {editingEntry && (
+                  <button className="btn-hover" onClick={saveCurrentEntry} style={{
+                    background: "#dc2626", border: "none", color: "#fff", padding: "12px", borderRadius: 8,
+                    cursor: "pointer", fontSize: 13, fontWeight: 700, fontFamily: "inherit", letterSpacing: 1, marginTop: 4,
+                  }}>SAVE ENTRY</button>
+                )}
+              </div>
+
+              <div style={{ marginTop: 28, borderTop: "1px solid #1a1a1a", paddingTop: 16 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                  <div style={{ fontSize: 10, color: "#525252", letterSpacing: 1, fontWeight: 600 }}>WEEK OVERVIEW</div>
+                  <div style={{ fontSize: 10, color: "#404040" }}>{weekStats.totalMiles} mi · {weekStats.logged}/7 logged</div>
+                </div>
+                {weekDates.map((d, i) => {
+                  const k = formatDateKey(d);
+                  const e = entries[k];
+                  if (!e || !e.type) return null;
+                  return (
+                    <div key={i} className="week-row" style={{
+                      display: "grid", gridTemplateColumns: "60px 8px 1fr auto", gap: 10, alignItems: "center",
+                      padding: "6px 0", borderBottom: "1px solid #111", fontSize: 12,
+                      opacity: k === dateKey ? 1 : 0.6,
+                    }} onClick={() => setSelectedDate(new Date(d))}>
+                      <div style={{ color: "#525252" }}>{["Mon","Tue","Wed","Thu","Fri","Sat","Sun"][i]}</div>
+                      <div style={{ width: 8, height: 8, borderRadius: "50%", background: getEntryColor(e) }} />
+                      <div style={{ color: "#a3a3a3", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {e.type}{e.type === "Race" && e.raceTime ? ` — ${e.raceEvent} ${e.raceTime}` : ""}
+                        {e.distance ? ` · ${e.distance}${e.distanceUnit === "miles" ? "mi" : e.distanceUnit === "km" ? "km" : "m"}` : ""}
+                      </div>
+                      <div>{feelingEmojis[e.feeling]}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+
+          <div style={{ marginTop: 32, fontSize: 9, color: "#1a1a1a", textAlign: "center" }}>
+            Training Log v2.0 · Google Sheets + Local Storage
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
